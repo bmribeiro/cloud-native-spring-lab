@@ -13,8 +13,8 @@ jobs:
     strategy:
       matrix:
         service:
-          - product-service
-          - order-service
+          - examples/01-rest-docker-compose-vps/product-service
+          - examples/01-rest-docker-compose-vps/order-service
 
     steps:
       - name: Checkout repository
