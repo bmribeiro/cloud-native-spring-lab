@@ -5,6 +5,23 @@
     container_name: product-service
     expose:
       - "8081"
+    
+    # Health check do product-service.
+    #
+    # O Docker executa este comando periodicamente dentro do container.
+    # Se o endpoint /actuator/health/readiness responder com HTTP 2xx,
+    # o container é considerado "healthy".
+    #
+    # Este estado é usado pelo order-service e pelo gateway através de:
+    # depends_on:
+    #   condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
 
   order-service:
     build:
@@ -14,8 +31,29 @@
       PRODUCT_SERVICE_URL: http://product-service:8081
     expose:
       - "8082"
+
+    # Garante a ordem de arranque baseada em saúde.
+    #
+    # O order-service só é criado/iniciado depois de o product-service
+    # estar no estado "healthy".
+    #
+    # Isto é mais forte do que depends_on simples, porque não espera apenas
+    # que o container exista; espera que o healthcheck do product-service passe.
     depends_on:
-      - product-service
+      product-service:
+        condition: service_healthy
+
+    # Health check do order-service.
+    #
+    # O gateway vai depender deste estado para só arrancar depois de o
+    # order-service estar pronto para receber tráfego.    
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8082/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
 
   gateway:
     image: nginx:alpine
@@ -24,6 +62,20 @@
       - "80:80"
     volumes:
       - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    
+    # Garante que o gateway só arranca depois de os dois serviços
+    # Spring Boot estarem saudáveis.
+    #
+    # product-service precisa de estar "healthy".
+    # order-service precisa de estar "healthy".
+    #
+    # Assim, o Nginx não começa a encaminhar pedidos antes de os serviços
+    # internos estarem prontos.
     depends_on:
-      - product-service
-      - order-service
+      product-service:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy
+    restart: unless-stopped
+
+
