@@ -1,0 +1,111 @@
+services:
+  # Base de dados PostgreSQL usada pelos serviços da aplicação.
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-orders_db}
+      POSTGRES_USER: ${POSTGRES_USER:-orders_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orders_password}
+    volumes:
+      # Persiste os dados da base de dados entre reinícios dos containers.
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # Verifica se o PostgreSQL está pronto a aceitar ligações.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Broker RabbitMQ usado para comunicação assíncrona entre serviços.
+  rabbitmq:
+    image: rabbitmq:4-management
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-app_user}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-app_password}
+    ports:
+      # Expõe a consola de gestão do RabbitMQ apenas no localhost.
+      - "127.0.0.1:15672:15672"
+    volumes:
+      # Persiste dados/configuração do RabbitMQ.
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      # Verifica se o RabbitMQ está operacional.
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # API principal de encomendas.
+  orders-api:
+    build:
+      context: ./orders-api
+    restart: unless-stopped
+    environment:
+      # Configuração de ligação à base de dados.
+      DB_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-orders_db}
+      POSTGRES_USER: ${POSTGRES_USER:-orders_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orders_password}
+
+      # Configuração de ligação ao RabbitMQ.
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-app_user}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-app_password}
+
+      # Ativa debug remoto Java na porta 5005 dentro do container.
+      JAVA_TOOL_OPTIONS: >-
+        -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
+
+    ports:
+      # Expõe a API na porta 8080.
+      - "8080:8080"
+      # Expõe o debug remoto apenas no localhost.
+      - "127.0.0.1:5005:5005"
+    depends_on:
+      # Só arranca depois de PostgreSQL e RabbitMQ estarem saudáveis.
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # Worker responsável por processar notificações/eventos.
+  notifications-worker:
+    build:
+      context: ./notifications-worker
+    restart: unless-stopped
+    environment:
+      # Configuração de ligação à base de dados.
+      DB_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-orders_db}
+      POSTGRES_USER: ${POSTGRES_USER:-orders_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orders_password}
+
+      # Configuração de ligação ao RabbitMQ.
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-app_user}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-app_password}
+
+      # Número máximo de tentativas de processamento.
+      MAX_RETRIES: 3
+
+      # Ativa debug remoto Java na porta 5005 dentro do container.
+      JAVA_TOOL_OPTIONS: >-
+        -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
+
+    ports:
+      # Mapeia o debug do worker para a porta local 5006.
+      - "127.0.0.1:5006:5005"
+
+    depends_on:
+      # Só arranca depois de PostgreSQL e RabbitMQ estarem saudáveis.
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+# Volumes Docker usados para persistência de dados.
+volumes:
+  postgres_data:
+  rabbitmq_data:
