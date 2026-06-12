@@ -1,0 +1,138 @@
+services:
+  kafka:
+    image: apache/kafka:4.0.0
+    container_name: lab-kafka
+    ports:
+      # Porta para acesso ao Kafka a partir do host/IDE.
+      # Dentro do Docker Compose, os serviços usam kafka:9092.
+      - "9094:9094"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+
+      # KRaft single-node controller.
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+
+      # INTERNAL: usado por containers no Docker network.
+      # EXTERNAL: usado pelo host/IDE via localhost.
+      # CONTROLLER: usado internamente pelo modo KRaft.
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+      # Configuração adequada para laboratório single-node.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 3
+
+      # Mantém rigor: os tópicos devem ser criados pela aplicação via NewTopic.
+      # Se não tiveres beans NewTopic, muda para "true".
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+    networks:
+      - lab-net
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: lab-kafka-ui
+    ports:
+      # Aceder no browser por http://localhost:8090
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local-kafka
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - lab-net
+
+  api-gateway:
+    build: ./api-gateway
+    container_name: lab-api-gateway
+    ports:
+      # API pública do laboratório.
+      - "8080:8080"
+
+      # Debug remoto do api-gateway.
+      - "127.0.0.1:5005:5005"
+    environment:
+      # Ativa debug remoto Java na porta 5005 dentro do container.
+      JAVA_TOOL_OPTIONS: >-
+        -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
+    depends_on:
+      order-service:
+        condition: service_started
+    networks:
+      - lab-net
+
+  order-service:
+    build: ./order-service
+    container_name: lab-order-service
+    ports:
+      - "8081:8081"
+
+      # Debug remoto: host 5006 -> container 5005.
+      - "127.0.0.1:5006:5005"
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # Ativa debug remoto Java na porta 5005 dentro do container.
+      JAVA_TOOL_OPTIONS: >-
+        -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - lab-net
+
+  payment-service:
+    build: ./payment-service
+    container_name: lab-payment-service
+    ports:
+      - "8082:8082"
+
+      # Debug remoto: host 5007 -> container 5005.
+      - "127.0.0.1:5007:5005"
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # Ativa debug remoto Java na porta 5005 dentro do container.
+      JAVA_TOOL_OPTIONS: >-
+        -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - lab-net
+
+  notification-service:
+    build: ./notification-service
+    container_name: lab-notification-service
+    ports:
+      - "8083:8083"
+
+      # Debug remoto: host 5008 -> container 5005.
+      - "127.0.0.1:5008:5005"
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # Ativa debug remoto Java na porta 5005 dentro do container.
+      JAVA_TOOL_OPTIONS: >-
+        -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - lab-net
+
+networks:
+  lab-net:
+    driver: bridge
