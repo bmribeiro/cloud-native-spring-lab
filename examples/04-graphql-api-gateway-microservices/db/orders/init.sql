@@ -1,0 +1,13 @@
+CREATE TABLE IF NOT EXISTS orders (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  total NUMERIC(10,2) NOT NULL CHECK (total >= 0),
+  status VARCHAR(40) NOT NULL DEFAULT 'PENDING',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO orders (user_id, total, status) VALUES
+  (1, 49.90, 'PAID'),
+  (1, 19.50, 'PENDING'),
+  (2, 199.99, 'SHIPPED')
+ON CONFLICT DO NOTHING;

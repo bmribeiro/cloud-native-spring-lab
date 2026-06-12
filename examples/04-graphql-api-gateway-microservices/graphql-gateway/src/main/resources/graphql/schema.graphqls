@@ -1,0 +1,62 @@
+type Query {
+  health: Health!
+  users: [User!]!
+  user(id: ID!): User
+  orders: [Order!]!
+  order(id: ID!): Order
+  ordersByUser(userId: ID!): [Order!]!
+}
+
+type Mutation {
+  createUser(input: CreateUserInput!): User!
+  createOrder(input: CreateOrderInput!): Order!
+  updateOrderStatus(id: ID!, status: OrderStatus!): Order!
+}
+
+type Health {
+  gateway: String!
+  usersService: String!
+  ordersService: String!
+}
+
+type User {
+  id: ID!
+  name: String!
+  email: String!
+  role: UserRole!
+  createdAt: String!
+  orders: [Order!]!
+}
+
+type Order {
+  id: ID!
+  userId: ID!
+  user: User
+  total: Float!
+  status: OrderStatus!
+  createdAt: String!
+}
+
+input CreateUserInput {
+  name: String!
+  email: String!
+  role: UserRole = CUSTOMER
+}
+
+input CreateOrderInput {
+  userId: ID!
+  total: Float!
+  status: OrderStatus = PENDING
+}
+
+enum UserRole {
+  CUSTOMER
+  ADMIN
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  SHIPPED
+  CANCELLED
+}
