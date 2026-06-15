@@ -1,0 +1,55 @@
+services:
+  config-server:
+    build:
+      context: .
+      dockerfile: config-server/Dockerfile
+    container_name: config-server
+    ports:
+      - "8888:8888"
+    environment:
+      CONFIG_REPO_LOCATION: file:/config-repo
+    volumes:
+      - ./config-repo:/config-repo:ro
+    restart: on-failure
+
+  service-registry:
+    build:
+      context: .
+      dockerfile: service-registry/Dockerfile
+    container_name: service-registry
+    ports:
+      - "8761:8761"
+    restart: on-failure
+
+  product-service:
+    build:
+      context: .
+      dockerfile: product-service/Dockerfile
+    container_name: product-service
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      CONFIG_SERVER_URL: http://config-server:8888
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-registry:8761/eureka/
+    depends_on:
+      - config-server
+      - service-registry
+    restart: on-failure
+
+  order-service:
+    build:
+      context: .
+      dockerfile: order-service/Dockerfile
+    container_name: order-service
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      CONFIG_SERVER_URL: http://config-server:8888
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-registry:8761/eureka/
+    depends_on:
+      - config-server
+      - service-registry
+      - product-service
+    restart: on-failure
