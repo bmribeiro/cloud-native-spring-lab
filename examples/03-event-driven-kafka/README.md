@@ -1,59 +1,70 @@
 # 03-event-driven-kafka
 
-Laboratório prático de arquitetura cloud-native orientada a eventos com Spring Boot, microserviços, Docker Compose, API Gateway e Apache Kafka.
+Laboratório prático de arquitetura orientada a eventos com **Spring Boot**, **Docker Compose**, **API Gateway** e **Apache Kafka**.
 
-Este exemplo é independente e demonstra um fluxo realista de encomendas, pagamentos e notificações usando comunicação assíncrona por eventos.
+Este projeto simula um fluxo de encomendas, pagamentos e notificações. A fronteira externa é síncrona, via REST, mas a comunicação interna entre serviços é assíncrona, baseada em eventos Kafka.
 
 ---
 
-## 1. Objetivo
+## 1. Objetivo do laboratório
 
-Tópicos:
+Este módulo demonstra uma evolução natural face a exemplos anteriores baseados em REST e RabbitMQ, introduzindo Kafka como broker/event log distribuído.
 
-- microserviços Spring Boot independentes;
+O objetivo é estudar, de forma isolada e executável localmente:
+
+- separação entre serviços independentes;
 - API Gateway como ponto único de entrada HTTP;
-- comunicação REST síncrona para comandos e consultas externas;
-- comunicação assíncrona entre serviços usando Kafka;
-- eventos versionados;
+- comunicação REST apenas na fronteira externa;
+- comunicação assíncrona entre microserviços via Kafka;
+- tópicos versionados;
+- uso de `orderId` como message key;
+- preservação de ordem por entidade de negócio;
 - consumer groups;
-- message keys e ordem por entidade de negócio;
-- retries;
+- retries no consumidor;
 - Dead Letter Topic;
-- idempotência básica no consumidor;
+- idempotência básica no processamento de eventos;
 - observabilidade local com logs e Kafka UI.
 
 ---
 
-## 2. Arquitetura
+## 2. Arquitetura geral
 
 ```text
-Cliente
+Cliente HTTP
   |
-  | HTTP POST /api/orders
+  | POST /api/orders
+  | GET  /api/orders/{id}
   v
 API Gateway :8080
   |
+  | HTTP interno
   v
 Order Service :8081
   |
-  | OrderCreatedEvent
+  | publica OrderCreatedEvent
+  | topic: order.created.v1
   v
-Kafka topic: order.created.v1
+Kafka
   |
+  | consome OrderCreatedEvent
   v
 Payment Service :8082
   |
-  | PaymentResultEvent
+  | publica PaymentResultEvent
+  | topic: payment.result.v1
   v
-Kafka topic: payment.result.v1
+Kafka
   |
+  | consome PaymentResultEvent
   v
 Order Service
   |
-  | OrderStatusChangedEvent
+  | publica OrderStatusChangedEvent
+  | topic: order.status-changed.v1
   v
-Kafka topic: order.status-changed.v1
+Kafka
   |
+  | consome OrderStatusChangedEvent
   v
 Notification Service :8083
 ```
@@ -62,51 +73,198 @@ Notification Service :8083
 
 ## 3. Serviços
 
-| Serviço | Porta | Responsabilidade |
+| Serviço | Porta host | Responsabilidade |
 |---|---:|---|
-| api-gateway | 8080 | Encaminha `/api/orders/**` para `order-service` |
-| order-service | 8081 | Cria encomendas, publica eventos e atualiza estado |
-| payment-service | 8082 | Processa pagamentos assincronamente |
-| notification-service | 8083 | Simula notificações quando o estado muda |
-| kafka-ui | 8090 | Inspeciona tópicos, mensagens e consumer groups |
-| kafka | 9092/9094 | Broker Kafka em modo KRaft |
+| `api-gateway` | `8080` | Expõe a API pública e encaminha `/api/orders/**` para o `order-service` |
+| `order-service` | `8081` | Cria encomendas, guarda estado em memória, publica e consome eventos |
+| `payment-service` | `8082` | Consome eventos de encomenda criada e simula autorização/rejeição de pagamento |
+| `notification-service` | `8083` | Consome alterações de estado e simula envio de notificações |
+| `kafka` | `9094` | Broker Kafka acessível pelo host em `localhost:9094` |
+| `kafka-ui` | `8090` | Interface web para consultar tópicos, mensagens e consumer groups |
+
+Dentro da rede Docker, os serviços Spring Boot usam Kafka através de:
+
+```text
+kafka:9092
+```
+
+A partir do host, por exemplo a partir de uma IDE ou ferramenta externa, o Kafka fica acessível em:
+
+```text
+localhost:9094
+```
 
 ---
 
-## 4. Tópicos Kafka
+## 4. Estrutura do projeto
 
-| Tópico | Produtor | Consumidor |
-|---|---|---|
-| `order.created.v1` | order-service | payment-service |
-| `payment.result.v1` | payment-service | order-service |
-| `order.status-changed.v1` | order-service | notification-service |
-| `order.created.v1.DLT` | payment-service error handler | inspeção manual |
+```text
+03-event-driven-kafka/
+├── api-gateway/
+│   ├── Dockerfile
+│   ├── pom.xml
+│   └── src/main/resources/application.properties
+│
+├── order-service/
+│   ├── Dockerfile
+│   ├── pom.xml
+│   └── src/main/java/com/bmr/orders/
+│       ├── api/
+│       ├── domain/
+│       ├── events/
+│       ├── messaging/
+│       ├── service/
+│       └── store/
+│
+├── payment-service/
+│   ├── Dockerfile
+│   ├── pom.xml
+│   └── src/main/java/com/bmr/payments/
+│       ├── events/
+│       └── messaging/
+│
+├── notification-service/
+│   ├── Dockerfile
+│   ├── pom.xml
+│   └── src/main/java/com/bmr/notifications/
+│       ├── events/
+│       └── messaging/
+│
+├── docker-compose.yml
+└── README.md
+```
 
 ---
 
-## 5. Requisitos locais
+## 5. Tópicos Kafka
 
-- Docker
-- Docker Compose v2
-- Porta `8080`, `8081`, `8082`, `8083`, `8090`, `9092` e `9094` livres
+| Tópico | Produtor | Consumidor | Finalidade |
+|---|---|---|---|
+| `order.created.v1` | `order-service` | `payment-service` | Comunica que uma encomenda foi criada |
+| `payment.result.v1` | `payment-service` | `order-service` | Comunica o resultado do pagamento |
+| `order.status-changed.v1` | `order-service` | `notification-service` | Comunica alteração de estado da encomenda |
+| `order.created.v1.DLT` | Error handler do `payment-service` | Inspeção manual | Guarda mensagens que falharam após retries |
 
-Não precisas de Maven nem Java instalados localmente para executar via Docker Compose. O build é feito dentro de containers Maven.
+Os tópicos são criados pelas aplicações através de beans `NewTopic`, com:
+
+```text
+partitions = 3
+replicas    = 1
+```
+
+A configuração do broker mantém `KAFKA_AUTO_CREATE_TOPICS_ENABLE=false`, para que os tópicos sejam explicitamente declarados pela aplicação.
 
 ---
 
-## 6. Executar
+## 6. Fluxo funcional
+
+### 6.1 Criação da encomenda
+
+O cliente chama:
+
+```text
+POST /api/orders
+```
+
+O `api-gateway` encaminha o pedido para o `order-service`.
+
+O `order-service`:
+
+1. cria uma encomenda em estado `PENDING_PAYMENT`;
+2. guarda a encomenda em memória;
+3. publica um `OrderCreatedEvent` no tópico `order.created.v1`;
+4. devolve `202 Accepted` ao cliente.
+
+### 6.2 Processamento do pagamento
+
+O `payment-service` consome `OrderCreatedEvent`.
+
+A regra didática aplicada é:
+
+```text
+amount <= 1000.00 -> AUTHORIZED
+amount > 1000.00  -> REJECTED
+```
+
+Depois publica `PaymentResultEvent` em:
+
+```text
+payment.result.v1
+```
+
+### 6.3 Atualização do estado da encomenda
+
+O `order-service` consome `PaymentResultEvent`.
+
+Se o pagamento for autorizado, a encomenda passa para:
+
+```text
+PAID
+```
+
+Se o pagamento for rejeitado, a encomenda passa para:
+
+```text
+REJECTED
+```
+
+Depois publica `OrderStatusChangedEvent` em:
+
+```text
+order.status-changed.v1
+```
+
+### 6.4 Notificação
+
+O `notification-service` consome `OrderStatusChangedEvent` e simula a notificação através de logs.
+
+---
+
+## 7. Requisitos locais
+
+Antes de executar, confirmar que tens disponível:
+
+- Docker;
+- Docker Compose v2;
+- portas livres: `8080`, `8081`, `8082`, `8083`, `8090`, `9094`;
+- opcionalmente, `curl` para testar a API;
+- opcionalmente, `jq` para extrair campos JSON nos testes.
+
+---
+
+## 8. Executar o laboratório
+
+Na raiz do projeto:
 
 ```bash
 docker compose up --build
 ```
 
-Kafka UI:
+Para executar em segundo plano:
+
+```bash
+docker compose up --build -d
+```
+
+Ver containers em execução:
+
+```bash
+docker compose ps
+```
+
+Ver logs dos serviços principais:
+
+```bash
+docker compose logs -f order-service payment-service notification-service
+```
+
+Aceder ao Kafka UI:
 
 ```text
 http://localhost:8090
 ```
 
-Gateway:
+Aceder ao gateway:
 
 ```text
 http://localhost:8080
@@ -114,9 +272,37 @@ http://localhost:8080
 
 ---
 
-## 7. Testar fluxo aprovado
+## 9. Health checks
 
-Criar encomenda com valor abaixo ou igual a 1000:
+Verificar o gateway:
+
+```bash
+curl http://localhost:8080/actuator/health
+```
+
+Verificar o `order-service` diretamente:
+
+```bash
+curl http://localhost:8081/actuator/health
+```
+
+Verificar o `payment-service` diretamente:
+
+```bash
+curl http://localhost:8082/actuator/health
+```
+
+Verificar o `notification-service` diretamente:
+
+```bash
+curl http://localhost:8083/actuator/health
+```
+
+---
+
+## 10. Testar fluxo aprovado
+
+Criar uma encomenda com valor inferior ou igual a `1000.00`:
 
 ```bash
 curl -i -X POST http://localhost:8080/api/orders \
@@ -137,21 +323,21 @@ Exemplo de corpo:
 
 ```json
 {
-  "id": "...",
+  "id": "9f51f62a-8c37-4d7a-9b0f-2c8c6b3f0a62",
   "customerId": "customer-001",
   "amount": 49.90,
   "status": "PENDING_PAYMENT",
-  "createdAt": "..."
+  "createdAt": "2026-06-16T12:00:00Z"
 }
 ```
 
-Consultar estado:
+Consultar o estado da encomenda, substituindo `{orderId}` pelo `id` devolvido:
 
 ```bash
 curl http://localhost:8080/api/orders/{orderId}
 ```
 
-Após o processamento assíncrono, o estado deve ser:
+Após alguns instantes, o estado esperado é:
 
 ```json
 {
@@ -159,9 +345,17 @@ Após o processamento assíncrono, o estado deve ser:
 }
 ```
 
+Também podes confirmar o fluxo nos logs:
+
+```bash
+docker compose logs -f order-service payment-service notification-service
+```
+
 ---
 
-## 8. Testar fluxo rejeitado
+## 11. Testar fluxo rejeitado
+
+Criar uma encomenda com valor superior a `1000.00`:
 
 ```bash
 curl -i -X POST http://localhost:8080/api/orders \
@@ -172,26 +366,29 @@ curl -i -X POST http://localhost:8080/api/orders \
   }'
 ```
 
-Resultado esperado depois do processamento:
-
-```json
-{
-  "status": "REJECTED"
-}
-```
-
-A regra está no `payment-service`:
+A encomenda é criada inicialmente em:
 
 ```text
-amount <= 1000.00 -> AUTHORIZED
-amount > 1000.00  -> REJECTED
+PENDING_PAYMENT
+```
+
+Depois do processamento assíncrono, o estado esperado é:
+
+```text
+REJECTED
+```
+
+Consultar:
+
+```bash
+curl http://localhost:8080/api/orders/{orderId}
 ```
 
 ---
 
-## 9. Testar Dead Letter Topic
+## 12. Testar Dead Letter Topic
 
-Criar encomenda com `customerId = "fail"`:
+Para forçar uma falha controlada no `payment-service`, criar uma encomenda com `customerId = "fail"`:
 
 ```bash
 curl -i -X POST http://localhost:8080/api/orders \
@@ -202,68 +399,126 @@ curl -i -X POST http://localhost:8080/api/orders \
   }'
 ```
 
-O `payment-service` lança uma exceção controlada para fins didáticos.
+O `payment-service` lança uma exceção de propósito para demonstrar retries e DLT.
 
-O evento será tentado novamente e, se continuar a falhar, será enviado para:
+O consumidor tenta processar a mensagem novamente. Depois de esgotadas as tentativas configuradas, o evento é enviado para:
 
 ```text
 order.created.v1.DLT
 ```
 
-Verificar em:
+Consultar no Kafka UI:
 
 ```text
 http://localhost:8090
 ```
 
----
+Caminho sugerido no Kafka UI:
 
-## 10. Ver logs úteis
-
-```bash
-docker compose logs -f order-service payment-service notification-service
-```
-
-Também podes usar:
-
-```bash
-make logs
+```text
+Topics -> order.created.v1.DLT -> Messages
 ```
 
 ---
 
-## 11. Escalar consumidores
+## 13. Observar tópicos e consumer groups
 
-Para estudar consumer groups:
+No Kafka UI, consultar:
+
+```text
+Topics
+```
+
+Tópicos esperados:
+
+```text
+order.created.v1
+payment.result.v1
+order.status-changed.v1
+order.created.v1.DLT
+```
+
+Consultar também:
+
+```text
+Consumer Groups
+```
+
+Consumer groups esperados:
+
+```text
+payment-service
+order-service
+notification-service
+```
+
+---
+
+## 14. Debug remoto
+
+O `docker-compose.yml` expõe portas de debug Java apenas em `127.0.0.1`:
+
+| Serviço | Porta local de debug | Porta no container |
+|---|---:|---:|
+| `api-gateway` | `5005` | `5005` |
+| `order-service` | `5006` | `5005` |
+| `payment-service` | `5007` | `5005` |
+| `notification-service` | `5008` | `5005` |
+
+Exemplo de configuração na IDE:
+
+```text
+Host: localhost
+Port: 5006
+Mode: Attach to remote JVM
+```
+
+---
+
+## 15. Escalar consumidores
+
+Kafka distribui mensagens por partições dentro de um consumer group. Neste laboratório, os tópicos são criados com três partições, o que permite estudar concorrência de consumo.
+
+Atenção: o `docker-compose.yml` atual usa `container_name`. O Docker Compose não permite escalar serviços que tenham `container_name` fixo, porque os nomes dos containers colidem.
+
+Para testar escala horizontal do `payment-service`, remover ou comentar esta linha no serviço `payment-service`:
+
+```yaml
+container_name: lab-payment-service
+```
+
+Depois executar:
 
 ```bash
 docker compose up --build --scale payment-service=3
 ```
 
-Observa no Kafka UI:
+Observar no Kafka UI:
 
 ```text
 Consumer Groups -> payment-service
 ```
 
-Importante: para escalar realmente o processamento, o tópico precisa de várias partições. Neste laboratório os tópicos são criados com 3 partições.
+Com três instâncias e três partições, cada instância pode ficar responsável por uma partição, dependendo do rebalanceamento do grupo.
 
 ---
 
-## 12. Decisões arquiteturais
+## 16. Decisões arquiteturais
 
-### REST para fronteira externa
+### 16.1 REST na fronteira externa
 
-O cliente chama REST para criar e consultar encomendas:
+O cliente não publica diretamente em Kafka. A entrada externa continua a ser HTTP:
 
 ```text
 POST /api/orders
-GET /api/orders/{id}
+GET  /api/orders/{id}
 ```
 
-### Eventos para comunicação entre serviços
+Isto mantém uma API simples para clientes externos e evita expor detalhes do broker.
 
-Os serviços internos comunicam por factos de negócio:
+### 16.2 Eventos para comunicação interna
+
+Os serviços internos comunicam por eventos de negócio:
 
 ```text
 OrderCreatedEvent
@@ -271,9 +526,11 @@ PaymentResultEvent
 OrderStatusChangedEvent
 ```
 
-### Tópicos versionados
+Cada evento representa um facto que já ocorreu, não uma chamada direta para executar lógica noutro serviço.
 
-Os nomes dos tópicos incluem versão:
+### 16.3 Tópicos versionados
+
+Os tópicos incluem versão no nome:
 
 ```text
 order.created.v1
@@ -281,23 +538,25 @@ payment.result.v1
 order.status-changed.v1
 ```
 
-Isto permite criar `v2` sem quebrar consumidores existentes.
+Isto permite criar uma futura versão `v2` sem quebrar consumidores existentes.
 
-### Key por entidade de negócio
+### 16.4 Message key por entidade de negócio
 
-Todos os eventos usam:
+Todos os eventos são publicados com:
 
 ```text
 Kafka key = orderId
 ```
 
-Isto ajuda a preservar a ordem relativa dos eventos da mesma encomenda, porque Kafka garante ordem dentro de uma partição.
+Kafka garante ordem dentro de uma partição. Usar o `orderId` como key ajuda a manter os eventos da mesma encomenda na mesma partição.
 
-### Idempotência
+### 16.5 Idempotência básica
 
-Os consumidores guardam `eventId` em memória depois de processar com sucesso para ignorar duplicados.
+Os consumidores guardam `eventId` em memória para ignorar duplicados já processados.
 
-Em produção, isto deve ser persistido numa tabela, por exemplo:
+Esta abordagem é suficiente para fins didáticos, mas não é robusta em produção porque a memória é perdida quando o serviço reinicia.
+
+Numa implementação real, seria preferível persistir os eventos processados, por exemplo:
 
 ```sql
 CREATE TABLE processed_events (
@@ -308,19 +567,146 @@ CREATE TABLE processed_events (
 );
 ```
 
-### Limitação deliberada
+### 16.6 Dead Letter Topic
 
-Este laboratório ainda não implementa Transactional Outbox.
+O `payment-service` usa `DefaultErrorHandler` e `DeadLetterPublishingRecoverer`.
 
-Logo, existe uma janela de falha entre:
-
-```text
-1. guardar a encomenda
-2. publicar OrderCreatedEvent
-```
-
-A evolução recomendada é criar o laboratório seguinte:
+Quando uma mensagem falha repetidamente, é enviada para:
 
 ```text
-04-transactional-outbox-debezium
+<topic-original>.DLT
 ```
+
+Neste laboratório:
+
+```text
+order.created.v1.DLT
+```
+
+Isto evita que uma mensagem problemática bloqueie indefinidamente o processamento normal do tópico principal.
+
+---
+
+## 17. Comandos úteis
+
+Subir tudo com rebuild:
+
+```bash
+docker compose up --build
+```
+
+Subir em background:
+
+```bash
+docker compose up --build -d
+```
+
+Ver estado dos containers:
+
+```bash
+docker compose ps
+```
+
+Ver logs de todos os serviços:
+
+```bash
+docker compose logs -f
+```
+
+Ver logs apenas dos serviços aplicacionais:
+
+```bash
+docker compose logs -f api-gateway order-service payment-service notification-service
+```
+
+Parar os containers:
+
+```bash
+docker compose down
+```
+
+Parar e remover volumes:
+
+```bash
+docker compose down -v
+```
+
+Rebuild sem cache:
+
+```bash
+docker compose build --no-cache
+```
+
+---
+
+## 18. Troubleshooting
+
+### Porta já ocupada
+
+Se alguma porta estiver ocupada, o Docker Compose pode falhar ao arrancar.
+
+Verificar processos a usar uma porta, por exemplo `8080`:
+
+```bash
+lsof -i :8080
+```
+
+Ou alterar o mapeamento de portas no `docker-compose.yml`.
+
+### Kafka UI não mostra tópicos
+
+Confirmar que o Kafka está saudável:
+
+```bash
+docker compose ps
+```
+
+Ver logs do broker:
+
+```bash
+docker compose logs -f kafka
+```
+
+Confirmar que os serviços Spring Boot arrancaram e criaram os tópicos:
+
+```bash
+docker compose logs -f order-service payment-service notification-service
+```
+
+### Encomenda fica em `PENDING_PAYMENT`
+
+Verificar se o `payment-service` está ativo:
+
+```bash
+docker compose logs -f payment-service
+```
+
+Verificar no Kafka UI se existem mensagens em:
+
+```text
+order.created.v1
+```
+
+Confirmar também se o consumer group `payment-service` está a consumir mensagens.
+
+### Não consigo escalar o `payment-service`
+
+Remover `container_name` do serviço antes de usar:
+
+```bash
+docker compose up --scale payment-service=3
+```
+
+Com `container_name` fixo, o Docker Compose não consegue criar múltiplos containers para o mesmo serviço.
+
+---
+
+## 19. Resumo técnico
+
+Este laboratório demonstra um fluxo event-driven completo:
+
+```text
+REST command -> OrderCreatedEvent -> PaymentResultEvent -> OrderStatusChangedEvent -> Notification
+```
+
+O ponto principal não é apenas trocar chamadas REST internas por Kafka. O objetivo é modelar a comunicação entre serviços como uma sequência de factos de negócio, com consumidores independentes, tópicos versionados, grupos de consumo, retries e tratamento explícito de falhas através de DLT.
