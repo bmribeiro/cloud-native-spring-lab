@@ -9,6 +9,7 @@ import com.bmr.orders_api.domain.OutboxEventRepository;
 import com.bmr.orders_api.events.EventEnvelope;
 import com.bmr.orders_api.events.OrderCreatedPayload;
 import com.bmr.orders_api.messaging.RabbitMqNames;
+import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.json.JsonMapper;
@@ -22,17 +23,21 @@ public class OrderService {
     private final OrderRepository orderRepository;
     private final OutboxEventRepository outboxEventRepository;
     private final JsonMapper jsonMapper;
+    private final EntityManager entityManager;
 
     public OrderService(OrderRepository orderRepository,
                         OutboxEventRepository outboxEventRepository,
-                        JsonMapper jsonMapper) {
+                        JsonMapper jsonMapper,
+                        EntityManager entityManager) {
         this.orderRepository = orderRepository;
         this.outboxEventRepository = outboxEventRepository;
         this.jsonMapper = jsonMapper;
+        this.entityManager = entityManager;
     }
 
     @Transactional
     public CreateOrderResponse createOrder(CreateOrderRequest request) {
+
         OrderEntity order = new OrderEntity(
                 request.customerEmail(),
                 request.amountCents(),
@@ -70,6 +75,9 @@ public class OrderService {
         );
 
         outboxEventRepository.save(outboxEvent);
+
+        // Força o Hibernate/JPA a executar os INSERTs
+        entityManager.flush();
 
         return new CreateOrderResponse(order.getId(), eventId, "ACCEPTED");
     }

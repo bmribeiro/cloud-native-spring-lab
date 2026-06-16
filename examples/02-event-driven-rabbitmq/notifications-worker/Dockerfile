@@ -17,7 +17,6 @@ COPY src ./src
 # -DskipTests evita a execução dos testes durante o build.
 RUN mvn -q -DskipTests package
 
-
 # Imagem final usada para executar a aplicação.
 # Contém apenas o JRE 21, suficiente para correr o .jar.
 FROM eclipse-temurin:21-jre-alpine
